@@ -1,6 +1,10 @@
 package main
 
-import "gonum.org/v1/gonum/mat"
+import (
+	"math"
+
+	"gonum.org/v1/gonum/mat"
+)
 
 // Contains all of the information that defines a trained neural network
 type neuralNet struct {
@@ -38,12 +42,15 @@ func newLayer(lcfg layerConfig) *layer {
 	weights := mat.NewDense(lcfg.inputNeurons, lcfg.neurons, nil)
 	biases := mat.NewDense(1, lcfg.neurons, nil)
 
-	for _, param := range [][]float64{
-		weights.RawMatrix().Data, biases.RawMatrix().Data,
-	} {
-		for i := range param {
-			param[i] = randGen.Float64()
-		}
+	// Xavier Scale to prevent saturation
+	limit := math.Sqrt(6.0 / float64(lcfg.inputNeurons+lcfg.neurons))
+	for i := range weights.RawMatrix().Data {
+		weights.RawMatrix().Data[i] = (2*randGen.Float64() - 1) * limit
+	}
+
+	// Set biases to 0
+	for i := range biases.RawMatrix().Data {
+		biases.RawMatrix().Data[i] = 0
 	}
 
 	return &layer{

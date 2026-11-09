@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"time"
@@ -50,28 +51,28 @@ func (nn *neuralNet) train(x, y *mat.Dense) error {
 	return nil
 }
 
-// TODO: Need to revisit this. im getting lost with the indexes and loopings
-// need to fully understand which values need to be combined with what
-
+// activationLayers[i] stores the output of layers[i]. inputFeatures is the
+// input to the first layer. deltaLayers[i] stores the error for layers[i].
 func (nn *neuralNet) backpropagate(inputFeatures, labels *mat.Dense, layers []*layer) error {
-	// Activation for each layer
-	activationLayers := make([]*mat.Dense, len(layers)+1)
-	// Error for each layer
+	activationLayers := make([]*mat.Dense, len(layers))
 	deltaLayers := make([]*mat.Dense, len(layers))
-
-	activationLayers[0] = inputFeatures
 
 	applySigmoid := func(_, _ int, v float64) float64 { return sigmoid(v) }
 	applySigmoidPrime := func(_, _ int, v float64) float64 { return sigmoidPrime(v) }
 
-	for i := 0; i < nn.config.numEpochs; i++ {
+	for epoch := 0; epoch < nn.config.numEpochs; epoch++ {
+		// Forward pass: each layer applies weights and bias, then sigmoid.
 		for idx, activations := range activationLayers {
 
+			// First layer reads raw input; later layers read previous output.
+			var inputs *mat.Dense
 			if idx == 0 {
-				continue
+				inputs = inputFeatures
+			} else {
+				inputs = activationLayers[idx-1]
 			}
 
-			hl := layers[idx-1]
+			hl := layers[idx]
 			applyBiases := func(_, col int, v float64) float64 { return v + hl.biases.At(0, col) }
 
 			if activations == nil {
@@ -79,26 +80,27 @@ func (nn *neuralNet) backpropagate(inputFeatures, labels *mat.Dense, layers []*l
 				activations = activationLayers[idx]
 			}
 
-			inputs := activationLayers[idx-1]
 			activations.Mul(inputs, hl.weights)
 			activations.Apply(applyBiases, activations)
 			activations.Apply(applySigmoid, activations)
 		}
 
-		// Calculate errors and propogate
+		// Backward pass: start with output error, then pass each error
+		// backward through the next layer's weights.
+		// error for layer[x] is stored in the `deltaLayers[x]`
 		for j := len(layers) - 1; j >= 0; j-- {
-			// Specifically to calculate output error
-
 			propogated := new(mat.Dense)
 
+			// Output error starts with label minus prediction.
 			if j == len(layers)-1 {
-				propogated.Sub(labels, activationLayers[j+1])
+				propogated.Sub(labels, activationLayers[j])
 			} else {
 				propogated.Mul(deltaLayers[j+1], layers[j+1].weights.T())
 			}
 
+			// Sigmoid derivative scales error by how much this output can change.
 			slope := new(mat.Dense)
-			slope.Apply(applySigmoidPrime, activationLayers[j+1])
+			slope.Apply(applySigmoidPrime, activationLayers[j])
 
 			if deltaLayers[j] == nil {
 				deltaLayers[j] = new(mat.Dense)
@@ -107,16 +109,20 @@ func (nn *neuralNet) backpropagate(inputFeatures, labels *mat.Dense, layers []*l
 			deltaLayers[j].MulElem(propogated, slope)
 		}
 
-		for i, layer := range layers {
-			// - W[l] += learningRate / batchSize * A[l]ᵀ * D[l+1]
-			// - b[l] += learningRate / batchSize * columnSums(D[l+1])
+		// Adjust weights using each layer's input and error. Adjust biases
+		// using summed errors. These gradients sum across examples, not average.
+		for layerIdx, layer := range layers {
 			weightAdjustments := new(mat.Dense)
-			weightAdjustments.Mul(activationLayers[i].T(), deltaLayers[i])
+			if layerIdx == 0 {
+				weightAdjustments.Mul(inputFeatures.T(), deltaLayers[layerIdx])
+			} else {
+				weightAdjustments.Mul(activationLayers[layerIdx-1].T(), deltaLayers[layerIdx])
+			}
 			weightAdjustments.Scale(nn.config.learningRate, weightAdjustments)
 
 			layer.weights.Add(layer.weights, weightAdjustments)
 
-			biasAdjustment, err := sumAlongAxis(0, deltaLayers[i])
+			biasAdjustment, err := sumAlongAxis(0, deltaLayers[layerIdx])
 			if err != nil {
 				return err
 			}
@@ -129,115 +135,6 @@ func (nn *neuralNet) backpropagate(inputFeatures, labels *mat.Dense, layers []*l
 	return nil
 }
 
-//	func (nn *neuralNet) train(x, y *mat.Dense) error {
-//		randSource := rand.NewSource(time.Now().UnixNano())
-//		randGen := rand.New(randSource)
-//
-//		wHidden := mat.NewDense(nn.config.inputNeurons, nn.config.hiddenNeurons, nil)
-//		bHidden := mat.NewDense(1, nn.config.hiddenNeurons, nil)
-//		wOut := mat.NewDense(nn.config.hiddenNeurons, nn.config.outputNeurons, nil)
-//		bOut := mat.NewDense(1, nn.config.outputNeurons, nil)
-//
-//		wHiddenRaw := wHidden.RawMatrix().Data
-//		bHiddenRaw := bHidden.RawMatrix().Data
-//		wOutRaw := wOut.RawMatrix().Data
-//		bOutRaw := bOut.RawMatrix().Data
-//
-//		for _, param := range [][]float64{
-//			wHiddenRaw,
-//			bHiddenRaw,
-//			wOutRaw,
-//			bOutRaw,
-//		} {
-//			for i := range param {
-//				param[i] = randGen.Float64()
-//			}
-//		}
-//
-//		// Define output
-//		output := new(mat.Dense)
-//
-//		// Use backpropagation
-//		//
-//		if err := nn.backpropagate(x, y, wHidden, bHidden, wOut, bOut, output); err != nil {
-//			return err
-//		}
-//
-//		nn.wHidden = wHidden
-//		nn.bHidden = bHidden
-//		nn.wOut = wOut
-//		nn.bOut = bOut
-//		return nil
-//	}
-//
-//	func (nn *neuralNet) backpropagate(x, y, wHidden, bHidden, wOut, bOut, output *mat.Dense) error {
-//		// loop over the number of epochs utilizing backpropogation
-//		//
-//		for i := 0; i < nn.config.numEpochs; i++ {
-//
-//			hiddenLayerInput := new(mat.Dense)
-//			hiddenLayerInput.Mul(x, wHidden)
-//			addBHidden := func(_, col int, v float64) float64 { return v + bHidden.At(0, col) }
-//			hiddenLayerInput.Apply(addBHidden, hiddenLayerInput)
-//
-//			hiddenLayerActivations := new(mat.Dense)
-//			applySigmoid := func(_, _ int, v float64) float64 { return sigmoid(v) }
-//			hiddenLayerActivations.Apply(applySigmoid, hiddenLayerInput)
-//
-//			outputLayerInput := new(mat.Dense)
-//			outputLayerInput.Mul(hiddenLayerActivations, wOut)
-//			addBOut := func(_, col int, v float64) float64 { return v + bOut.At(0, col) }
-//			outputLayerInput.Apply(addBOut, outputLayerInput)
-//			output.Apply(applySigmoid, outputLayerInput)
-//
-//			// Complete the backpropagation
-//			networkError := new(mat.Dense)
-//			networkError.Sub(y, output)
-//
-//			applySigmoidPrime := func(_, _ int, v float64) float64 {
-//				return sigmoidPrime(v)
-//			}
-//			slopeOutputLayer := new(mat.Dense)
-//			slopeOutputLayer.Apply(applySigmoidPrime, output)
-//			slopeHiddenLayer := new(mat.Dense)
-//			slopeHiddenLayer.Apply(applySigmoidPrime, hiddenLayerActivations)
-//
-//			dOutput := new(mat.Dense)
-//			dOutput.MulElem(networkError, slopeOutputLayer)
-//			errorAtHiddenLayer := new(mat.Dense)
-//			errorAtHiddenLayer.Mul(dOutput, wOut.T())
-//
-//			dHiddenLayer := new(mat.Dense)
-//			dHiddenLayer.MulElem(errorAtHiddenLayer, slopeHiddenLayer)
-//
-//			wOutAdj := new(mat.Dense)
-//			wOutAdj.Mul(hiddenLayerActivations.T(), dOutput)
-//			wOutAdj.Scale(nn.config.learningRate, wOutAdj)
-//			wOut.Add(wOut, wOutAdj)
-//
-//			bOutAdj, err := sumAlongAxis(0, dOutput)
-//			if err != nil {
-//				return err
-//			}
-//			bOutAdj.Scale(nn.config.learningRate, bOutAdj)
-//			bOut.Add(bOut, bOutAdj)
-//
-//			wHiddenAdj := new(mat.Dense)
-//			wHiddenAdj.Mul(x.T(), dHiddenLayer)
-//			wHiddenAdj.Scale(nn.config.learningRate, wHiddenAdj)
-//			wHidden.Add(wHidden, wHiddenAdj)
-//
-//			bHiddenAdj, err := sumAlongAxis(0, dHiddenLayer)
-//			if err != nil {
-//				return err
-//			}
-//			bHiddenAdj.Scale(nn.config.learningRate, bHiddenAdj)
-//			bHidden.Add(bHidden, bHiddenAdj)
-//		}
-//
-//		return nil
-//	}
-//
 // sums a matrix along a particular dimension,
 // preserving other dimensions
 func sumAlongAxis(axis int, m *mat.Dense) (*mat.Dense, error) {
@@ -247,14 +144,14 @@ func sumAlongAxis(axis int, m *mat.Dense) (*mat.Dense, error) {
 	switch axis {
 	case 0:
 		data := make([]float64, numCols)
-		for i := 0; i < numCols; i++ {
+		for i := range numCols {
 			col := mat.Col(nil, i, m)
 			data[i] = floats.Sum(col)
 		}
 		output = mat.NewDense(1, numCols, data)
 	case 1:
 		data := make([]float64, numRows)
-		for i := 0; i < numRows; i++ {
+		for i := range numRows {
 			row := mat.Row(nil, i, m)
 			data[i] = floats.Sum(row)
 		}
@@ -265,33 +162,40 @@ func sumAlongAxis(axis int, m *mat.Dense) (*mat.Dense, error) {
 	return output, nil
 }
 
-//
-// // makes a prediction
-// func (nn *neuralNet) predict(x *mat.Dense) (*mat.Dense, error) {
-// 	if nn.wHidden == nil || nn.wOut == nil {
-// 		return nil, errors.New("Weights are empty")
-// 	}
-// 	if nn.bHidden == nil || nn.bOut == nil {
-// 		return nil, errors.New("Biases are empty")
-// 	}
-//
-// 	output := new(mat.Dense)
-//
-// 	// Feed forward process
-// 	hiddenLayerInput := new(mat.Dense)
-// 	hiddenLayerInput.Mul(x, nn.wHidden)
-// 	addBHidden := func(_, col int, v float64) float64 { return v + nn.bHidden.At(0, col) }
-// 	hiddenLayerInput.Apply(addBHidden, hiddenLayerInput)
-//
-// 	hiddenLayerActivations := new(mat.Dense)
-// 	applySigmoid := func(_, _ int, v float64) float64 { return sigmoid(v) }
-// 	hiddenLayerActivations.Apply(applySigmoid, hiddenLayerInput)
-//
-// 	outputLayerInput := new(mat.Dense)
-// 	outputLayerInput.Mul(hiddenLayerActivations, nn.wOut)
-// 	addBOut := func(_, col int, v float64) float64 { return v + nn.bOut.At(0, col) }
-// 	outputLayerInput.Apply(addBOut, outputLayerInput)
-// 	output.Apply(applySigmoid, outputLayerInput)
-//
-// 	return output, nil
-// }
+// makes a prediction
+func (nn *neuralNet) predict(x *mat.Dense) (*mat.Dense, error) {
+	if nn == nil || len(nn.hiddenLayers) == 0 || nn.outputLayer == nil {
+		return nil, errors.New("network is not trained")
+	}
+	if x == nil {
+		return nil, errors.New("input is nil")
+	}
+
+	_, inputCols := x.Dims()
+	expectedCols, _ := nn.hiddenLayers[0].weights.Dims()
+	if inputCols != expectedCols {
+		return nil, fmt.Errorf(
+			"input has %d features; want %d",
+			inputCols, expectedCols,
+		)
+	}
+	var layers []*layer
+	layers = append(layers, nn.hiddenLayers...)
+	layers = append(layers, nn.outputLayer)
+
+	activationLayers := make([]*mat.Dense, len(layers))
+
+	for i, hl := range layers {
+		activation := new(mat.Dense)
+
+		if i == 0 {
+			activation.Mul(x, hl.weights)
+		} else {
+			activation.Mul(activationLayers[i-1], hl.weights)
+		}
+		activation.Apply(func(_ int, col int, v float64) float64 { return sigmoid(v + hl.biases.At(0, col)) }, activation)
+		activationLayers[i] = activation
+	}
+
+	return activationLayers[len(layers)-1], nil
+}
